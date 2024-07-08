@@ -1,0 +1,101 @@
+//Microcontroller : ESP8266
+//Temperature & humidity sensor : DHT11
+//PM sensor : PMS5003 
+
+#include <ESP8266WiFi.h>
+#include "ESP8266TimerInterrupt.h"
+#include "ESP8266_ISR_Timer.h"
+#include <SPI.h>
+#include <DHT11.h>
+#include <ThingSpeak.h>
+#include <SoftwareSerial.h>
+#include "PMS5003.h"
+
+#define USING_TIM_DIV1                false          
+#define USING_TIM_DIV16               false           
+#define USING_TIM_DIV256              true            
+
+#define HW_TIMER_INTERVAL_MS          50L
+#define TIMER_INTERVAL_60S            60000L
+
+#define DHTPIN 0
+
+#define LENG 31   // 32 bajti podatok od PMS5003 - 1 bajt prv start bajt
+unsigned char buf[LENG];
+
+SoftwareSerial pmsSerial(5, 4); // 37 RX 38 TX
+ESP8266Timer ITimer;
+ESP8266_ISR_Timer ISR_Timer;
+WiFiClient  client;
+DHT11 dht11(DHTPIN);
+
+char ssid[] = "Ibo Ism"; // WiFi name
+char pass[] = "iboiboibo"; // Wifi pass
+
+unsigned long myChannelNumber = 2425617; // thingspeak channel number (as int/long)
+const char * myWriteAPIKey = "KW1YKD0MXAKDCUY1"; // thingspeak write api
+const char * myReadAPIKey = "9USG47QSK35EYMJL"; // thing speak read api
+
+int check = 1, count = 0;
+
+int t = 0, h = 0;
+int PM1=0, PM2_5=0, PM10=0;
+
+void IRAM_ATTR TimerHandler()
+{
+  ISR_Timer.run();
+}
+
+void on60s(){
+  check = 1;
+}
+
+void setup() {
+  Serial.begin(115200);  // Initialize USB serial  
+  pmsSerial.begin(9600); // Initialize PMS serial
+
+  WiFi.mode(WIFI_STA); // Select WiFi Mode
+  ThingSpeak.begin(client);  // Initialize ThingSpeak
+  ITimer.attachInterruptInterval(HW_TIMER_INTERVAL_MS * 1000, TimerHandler); // Initialize interrupt timer
+  ISR_Timer.setInterval(TIMER_INTERVAL_60S, on60s); // Initialize ISR timer
+}
+
+void loop() {
+
+  // Connect or reconnect to WiFi
+  if(WiFi.status() != WL_CONNECTED){
+    Serial.print("Attempting to connect to SSID: ");
+    Serial.println(ssid);
+    WiFi.begin(ssid, pass);
+    while(WiFi.status() != WL_CONNECTED){
+      Serial.print(".");
+      delay(1000);     
+    } 
+    Serial.println("\nConnected.");
+  }
+
+  if(check){
+    dht11.readTemperatureHumidity(t, h);
+    Serial.println("DHT11 reading done.");
+    
+    while(!pmsSerial.find(0x42)){    //start to read when detect 0x42
+      delay(10);
+    }
+      
+    pmsSerial.readBytes(buf,LENG);
+    PM1=transmitPM01(buf);   //count PM1.0 value of the air detector module
+    PM2_5=transmitPM2_5(buf);//count PM2.5 value of the air detector module
+    PM10=transmitPM10(buf);  //count PM10 value of the air detector module
+      
+    Serial.println("PMS5003 reading done.");
+
+    ThingSpeak.setField(1, t);
+    ThingSpeak.setField(2, h);
+    ThingSpeak.setField(3, PM1);
+    ThingSpeak.setField(4, PM2_5);
+    ThingSpeak.setField(5, PM10);
+    ThingSpeak.writeFields(myChannelNumber, myWriteAPIKey);
+    Serial.println("Channel update done.");
+    check = 0;
+  }
+}
